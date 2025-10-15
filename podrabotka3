@@ -13,8 +13,8 @@ from io import BytesIO
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "8355380571:AAEV9Yfraz1LEXFh5ZC3tq8Cv5LuN2KerYk"
 ADMIN_IDS = [794753395]
 
-POSITIONS = ["Слесарь", "Токарь", "Сварщик", "Электрик", "Наладчик"]
-SECTIONS = ["Участок-1", "Участок-2", "Участок-3", "Участок-4", "Сборка"]
+POSITIONS = ["Упаковщик", "Оператор"]
+SECTIONS = ["3д", "Ручные операции", "Круглые формы", "Сборка"]
 
 # === БАЗА ДАННЫХ ===
 def init_db():
