@@ -1,0 +1,340 @@
+import os
+import sqlite3
+from datetime import datetime, timedelta
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from openpyxl import Workbook
+from io import BytesIO
+
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "8355380571:AAEV9Yfraz1LEXFh5ZC3tq8Cv5LuN2KerYk"
+ADMIN_IDS = [794753395]
+
+POSITIONS = ["Слесарь", "Токарь", "Сварщик", "Электрик", "Наладчик"]
+SECTIONS = ["Участок-1", "Участок-2", "Участок-3", "Участок-4", "Сборка"]
+
+def init_db():
+    conn = sqlite3.connect('jobs.db')
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            position TEXT NOT NULL,
+            section TEXT NOT NULL,
+            datetime TEXT NOT NULL,
+            is_taken INTEGER DEFAULT 0,
+            worker_id INTEGER,
+            worker_name TEXT
+        )
+    ''')
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            full_name TEXT,
+            position TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def get_user(user_id, full_name):
+    conn = sqlite3.connect('jobs.db')
+    cur = conn.cursor()
+    cur.execute("SELECT position FROM users WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    if not row:
+        cur.execute("INSERT INTO users (user_id, full_name) VALUES (?, ?)", (user_id, full_name))
+        conn.commit()
+        position = None
+    else:
+        position = row[0]
+    conn.close()
+    return position
+
+def save_user_position(user_id, position):
+    conn = sqlite3.connect('jobs.db')
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET position = ? WHERE user_id = ?", (position, user_id))
+    conn.commit()
+    conn.close()
+
+def cleanup_old_jobs():
+    conn = sqlite3.connect('jobs.db')
+    cur = conn.cursor()
+    now = datetime.now()
+    cur.execute("SELECT id, datetime FROM jobs")
+    rows = cur.fetchall()
+    for row in rows:
+        job_id, dt_str = row
+        try:
+            job_dt = datetime.strptime(dt_str, "%d.%m.%Y %H:%M")
+            if job_dt < now - timedelta(hours=1):
+                cur.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        except:
+            pass
+    conn.commit()
+    conn.close()
+
+class AddJob(StatesGroup):
+    position = State()
+    section = State()
+    datetime = State()
+
+class FindJob(StatesGroup):
+    position = State()
+    section = State()
+
+class RegisterPosition(StatesGroup):
+    position = State()
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(bot, storage=MemoryStorage())
+
+def get_positions_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    for pos in POSITIONS:
+        keyboard.add(pos)
+    return keyboard
+
+def get_sections_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    for sec in SECTIONS:
+        keyboard.add(sec)
+    return keyboard
+
+@dp.message_handler(commands=['start'])
+async def start(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    full_name = message.from_user.full_name
+    position = get_user(user_id, full_name)
+    if user_id in ADMIN_IDS:
+        await message.answer(
+            f"🛠 Привет, мастер!\n"
+            "• /add_job — добавить подработку\n"
+            "• /admin — посмотреть все заявки\n"
+            "• /export — выгрузить в Excel"
+        )
+    else:
+        if not position:
+            await message.answer(f"👋 Привет, {full_name}!\nПожалуйста, укажи свою должность:", reply_markup=get_positions_keyboard())
+            await RegisterPosition.position.set()
+        else:
+            await message.answer(f"👋 Привет, {full_name}!\n• /find_job — найти подработку\n• /my_bookings — мои бронирования")
+
+@dp.message_handler(state=RegisterPosition.position)
+async def register_position(message: types.Message, state: FSMContext):
+    if message.text not in POSITIONS:
+        await message.answer("Выберите из списка!", reply_markup=get_positions_keyboard())
+        return
+    save_user_position(message.from_user.id, message.text)
+    await message.answer(f"✅ Отлично! Теперь ты — {message.text}.\nМожешь использовать /find_job для поиска подработок.")
+    await state.finish()
+
+@dp.message_handler(commands=['my_bookings'])
+async def my_bookings(message: types.Message):
+    user_id = message.from_user.id
+    conn = sqlite3.connect('jobs.db')
+    cur = conn.cursor()
+    cur.execute("SELECT id, position, section, datetime FROM jobs WHERE worker_id = ? AND is_taken = 1", (user_id,))
+    bookings = cur.fetchall()
+    conn.close()
+    if not bookings:
+        await message.answer("У тебя нет активных бронирований.")
+        return
+    for b in bookings:
+        markup = types.InlineKeyboardMarkup()
+        btn = types.InlineKeyboardButton("❌ Отменить", callback_data=f"cancel_{b[0]}")
+        markup.add(btn)
+        await message.answer(f"ID {b[0]} | {b[1]} | {b[2]} | {b[3]}", reply_markup=markup)
+
+@dp.callback_query_handler(lambda c: c.data.startswith('cancel_'))
+async def cancel_booking(callback_query: types.CallbackQuery):
+    job_id = int(callback_query.data.split('_')[1])
+    user_id = callback_query.from_user.id
+    conn = sqlite3.connect('jobs.db')
+    cur = conn.cursor()
+    cur.execute("SELECT worker_id FROM jobs WHERE id = ?", (job_id,))
+    row = cur.fetchone()
+    if not row or row[0] != user_id:
+        await callback_query.answer("Это не твоя бронь!", show_alert=True)
+        conn.close()
+        return
+    cur.execute("UPDATE jobs SET is_taken = 0, worker_id = NULL, worker_name = NULL WHERE id = ?", (job_id,))
+    conn.commit()
+    conn.close()
+    await callback_query.message.edit_text("🕗 Бронирование отменено.")
+    await callback_query.answer("Бронь отменена!")
+
+@dp.message_handler(commands=['admin'])
+async def admin_panel(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Доступ запрещён.")
+        return
+    cleanup_old_jobs()
+    conn = sqlite3.connect('jobs.db')
+    cur = conn.cursor()
+    cur.execute("SELECT id, position, section, datetime, is_taken, worker_name FROM jobs ORDER BY datetime")
+    jobs = cur.fetchall()
+    conn.close()
+    if not jobs:
+        await message.answer("Нет подработок.")
+        return
+    text = "📋 Все подработки:\n\n"
+    for j in jobs:
+        status = "✅ Занята" if j[4] else "🕗 Свободна"
+        worker = f" ({j[5]})" if j[5] else ""
+        text += f"ID {j[0]} | {j[1]} | {j[2]} | {j[3]} | {status}{worker}\n"
+    await message.answer(text)
+
+@dp.message_handler(commands=['export'])
+async def export_to_excel(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Доступ запрещён.")
+        return
+    cleanup_old_jobs()
+    conn = sqlite3.connect('jobs.db')
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT j.datetime, j.position, j.section, u.full_name, j.worker_id
+        FROM jobs j
+        LEFT JOIN users u ON j.worker_id = u.user_id
+        WHERE j.datetime LIKE ?
+        ORDER BY j.datetime
+    """, (f"%{datetime.now().strftime('%m.%Y')}%",))
+    rows = cur.fetchall()
+    conn.close()
+    if not rows:
+        await message.answer("Нет данных за текущий месяц.")
+        return
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Подработки"
+    ws.append(["Дата и время", "Должность", "Участок", "Работник", "Telegram ID"])
+    for row in rows:
+        ws.append(row)
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    await message.answer_document(
+        document=types.InputFile(output, filename=f"podrabotki_{datetime.now().strftime('%m-%Y')}.xlsx"),
+        caption="✅ Выгрузка за текущий месяц"
+    )
+
+@dp.message_handler(commands=['add_job'])
+async def add_job_start(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("У вас нет прав.")
+        return
+    await message.answer("Выберите должность:", reply_markup=get_positions_keyboard())
+    await AddJob.position.set()
+
+@dp.message_handler(state=AddJob.position)
+async def add_job_position(message: types.Message, state: FSMContext):
+    if message.text not in POSITIONS:
+        await message.answer("Выберите из списка!", reply_markup=get_positions_keyboard())
+        return
+    await state.update_data(position=message.text)
+    await message.answer("Выберите участок:", reply_markup=get_sections_keyboard())
+    await AddJob.section.set()
+
+@dp.message_handler(state=AddJob.section)
+async def add_job_section(message: types.Message, state: FSMContext):
+    if message.text not in SECTIONS:
+        await message.answer("Выберите из списка!", reply_markup=get_sections_keyboard())
+        return
+    await state.update_data(section=message.text)
+    await message.answer("Введите дату и время: ДД.ММ.ГГГГ ЧЧ:ММ\nПример: 07.04.2025 18:00")
+    await AddJob.datetime.set()
+
+@dp.message_handler(state=AddJob.datetime)
+async def add_job_datetime(message: types.Message, state: FSMContext):
+    try:
+        datetime.strptime(message.text, "%d.%m.%Y %H:%M")
+    except ValueError:
+        await message.answer("Неверный формат! Используйте: ДД.ММ.ГГГГ ЧЧ:ММ")
+        return
+    user_data = await state.get_data()
+    position = user_data['position']
+    section = user_data['section']
+    dt = message.text
+    conn = sqlite3.connect('jobs.db')
+    cur = conn.cursor()
+    cur.execute("INSERT INTO jobs (position, section, datetime) VALUES (?, ?, ?)",
+                (position, section, dt))
+    conn.commit()
+    conn.close()
+    await message.answer(f"✅ Подработка добавлена!\n{position} | {section} | {dt}")
+    await state.finish()
+
+@dp.message_handler(commands=['find_job'])
+async def find_job_start(message: types.Message):
+    user_id = message.from_user.id
+    full_name = message.from_user.full_name
+    position = get_user(user_id, full_name)
+    if not position:
+        await message.answer("Сначала укажи должность через /start")
+        return
+    await message.answer("Выберите участок:", reply_markup=get_sections_keyboard())
+    await FindJob.section.set()
+    await FindJob.position.set()  # чтобы сохранить должность
+
+@dp.message_handler(state=FindJob.section)
+async def find_job_section(message: types.Message, state: FSMContext):
+    if message.text not in SECTIONS:
+        await message.answer("Выберите из списка!", reply_markup=get_sections_keyboard())
+        return
+    user_id = message.from_user.id
+    full_name = message.from_user.full_name
+    position = get_user(user_id, full_name)
+    section = message.text
+    cleanup_old_jobs()
+    conn = sqlite3.connect('jobs.db')
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, datetime FROM jobs 
+        WHERE position = ? AND section = ? AND is_taken = 0 
+        AND datetime >= ?
+        ORDER BY datetime
+    """, (position, section, datetime.now().strftime("%d.%m.%Y %H:%M")))
+    results = cur.fetchall()
+    conn.close()
+    if not results:
+        await message.answer("🕗 Нет доступных подработок на ближайшую неделю.")
+        await state.finish()
+        return
+    for job_id, dt in results:
+        markup = types.InlineKeyboardMarkup()
+        btn = types.InlineKeyboardButton("✅ Записаться", callback_data=f"take_{job_id}")
+        markup.add(btn)
+        await message.answer(f"🕗 {dt}\nУчасток: {section}", reply_markup=markup)
+    await state.finish()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('take_'))
+async def take_job(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    user_name = callback_query.from_user.full_name
+    job_id = int(callback_query.data.split('_')[1])
+    conn = sqlite3.connect('jobs.db')
+    cur = conn.cursor()
+    cur.execute("SELECT is_taken FROM jobs WHERE id = ?", (job_id,))
+    row = cur.fetchone()
+    if not row or row[0] == 1:
+        await callback_query.answer("❌ Эта подработка уже занята!", show_alert=True)
+        await callback_query.message.delete()
+        conn.close()
+        return
+    cur.execute("UPDATE jobs SET is_taken = 1, worker_id = ?, worker_name = ? WHERE id = ?",
+                (user_id, user_name, job_id))
+    conn.commit()
+    conn.close()
+    await callback_query.message.edit_text(
+        f"✅ Вы записаны на подработку!\nID: {job_id}\nРаботник: {user_name}"
+    )
+    await callback_query.answer("Вы успешно записались!")
+
+if __name__ == '__main__':
+    init_db()
+    from aiogram import executor
+    print("✅ Бот запущен!")
+    executor.start_polling(dp, skip_updates=True)
