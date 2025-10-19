@@ -5,6 +5,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     envVars:
-      - key: 8355380571:AAEV9Yfraz1LEXFh5ZC3tq8Cv5LuN2KerYk
+      - key: BOT_TOKEN
         value: 8355380571:AAEV9Yfraz1LEXFh5ZC3tq8Cv5LuN2KerYk
     region: frankfurt
+    runtime: python-3.12.7
