@@ -5,6 +5,6 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     envVars:
-      - key: workshift-bot2
+      - key: 8355380571:AAEV9Yfraz1LEXFh5ZC3tq8Cv5LuN2KerYk
         value: 8355380571:AAEV9Yfraz1LEXFh5ZC3tq8Cv5LuN2KerYk
     region: frankfurt
