@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: workshift-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: workshift-bot2
+        value: 8355380571:AAEV9Yfraz1LEXFh5ZC3tq8Cv5LuN2KerYk
+    region: frankfurt
