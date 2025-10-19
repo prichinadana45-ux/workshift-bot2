@@ -9,14 +9,12 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from openpyxl import Workbook
 from io import BytesIO
 
-# === НАСТРОЙКИ ===
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "8355380571:AAEV9Yfraz1LEXFh5ZC3tq8Cv5LuN2KerYk"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [794753395]
 
-POSITIONS = ["Упаковщик", "Оператор"]
-SECTIONS = ["3д", "Ручные операции", "Круглые формы", "Сборка"]
+POSITIONS = ["Слесарь", "Токарь", "Сварщик", "Электрик", "Наладчик"]
+SECTIONS = ["Участок-1", "Участок-2", "Участок-3", "Участок-4", "Сборка"]
 
-# === БАЗА ДАННЫХ ===
 def init_db():
     conn = sqlite3.connect('jobs.db')
     cur = conn.cursor()
@@ -79,7 +77,6 @@ def cleanup_old_jobs():
     conn.commit()
     conn.close()
 
-# === СОСТОЯНИЯ ===
 class AddJob(StatesGroup):
     position = State()
     section = State()
@@ -91,11 +88,9 @@ class FindJob(StatesGroup):
 class RegisterPosition(StatesGroup):
     position = State()
 
-# === ИНИЦИАЛИЗАЦИЯ ===
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 
-# === КЛАВИАТУРЫ ===
 def get_positions_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     for pos in POSITIONS:
@@ -110,13 +105,11 @@ def get_sections_keyboard():
     keyboard.add("Отмена")
     return keyboard
 
-# === ОТМЕНА В ЛЮБОМ СОСТОЯНИИ ===
 @dp.message_handler(lambda message: message.text == "Отмена", state="*")
 async def cancel_handler(message: types.Message, state: FSMContext):
     await state.finish()
     await message.answer("❌ Действие отменено.")
 
-# === /start ===
 @dp.message_handler(Command("start"), state="*")
 async def start(message: types.Message, state: FSMContext):
     await state.finish()
@@ -140,7 +133,6 @@ async def start(message: types.Message, state: FSMContext):
             await message.answer(f"👋 Привет, {full_name}!\nВыберите ваш участок:", reply_markup=get_sections_keyboard())
             await FindJob.section.set()
 
-# === РЕГИСТРАЦИЯ ДОЛЖНОСТИ ===
 @dp.message_handler(state=RegisterPosition.position)
 async def register_position(message: types.Message, state: FSMContext):
     if message.text == "Отмена":
@@ -153,7 +145,6 @@ async def register_position(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Отлично! Теперь ты — {message.text}.\nМожешь использовать /find_job или /start для поиска подработок.")
     await state.finish()
 
-# === /find_job ===
 @dp.message_handler(Command("find_job"), state="*")
 async def find_job_start(message: types.Message, state: FSMContext):
     await state.finish()
@@ -169,7 +160,6 @@ async def find_job_start(message: types.Message, state: FSMContext):
     await message.answer("Выберите ваш участок:", reply_markup=get_sections_keyboard())
     await FindJob.section.set()
 
-# === ВЫБОР УЧАСТКА И ПОКАЗ ПОДРАБОТОК ===
 @dp.message_handler(state=FindJob.section)
 async def find_job_section(message: types.Message, state: FSMContext):
     if message.text == "Отмена":
@@ -212,7 +202,6 @@ async def find_job_section(message: types.Message, state: FSMContext):
 
     await state.finish()
 
-# === МОИ БРОНИРОВАНИЯ ===
 @dp.message_handler(Command("my_bookings"), state="*")
 async def my_bookings(message: types.Message, state: FSMContext):
     await state.finish()
@@ -233,7 +222,6 @@ async def my_bookings(message: types.Message, state: FSMContext):
         markup.add(btn)
         await message.answer(f"ID {b[0]} | {b[1]} | {b[2]} | {b[3]}", reply_markup=markup)
 
-# === ОТМЕНА БРОНИ ===
 @dp.callback_query_handler(lambda c: c.data.startswith('cancel_'))
 async def cancel_booking(callback_query: types.CallbackQuery):
     job_id = int(callback_query.data.split('_')[1])
@@ -255,7 +243,6 @@ async def cancel_booking(callback_query: types.CallbackQuery):
     await callback_query.message.edit_text("🕗 Бронирование отменено.")
     await callback_query.answer("Бронь отменена!")
 
-# === АДМИНКА ===
 @dp.message_handler(Command("admin"), state="*")
 async def admin_panel(message: types.Message, state: FSMContext):
     await state.finish()
@@ -278,7 +265,6 @@ async def admin_panel(message: types.Message, state: FSMContext):
         text += f"ID {j[0]} | {j[1]} | {j[2]} | {j[3]} | {status}{worker}\n"
     await message.answer(text)
 
-# === ЭКСПОРТ В EXCEL ===
 @dp.message_handler(Command("export"), state="*")
 async def export_to_excel(message: types.Message, state: FSMContext):
     await state.finish()
@@ -320,7 +306,6 @@ async def export_to_excel(message: types.Message, state: FSMContext):
         caption="✅ Выгрузка за текущий месяц"
     )
 
-# === ДОБАВЛЕНИЕ ПОДРАБОТКИ (с сбросом состояния) ===
 @dp.message_handler(Command("add_job"), state="*")
 async def add_job_start(message: types.Message, state: FSMContext):
     await state.finish()
@@ -380,7 +365,6 @@ async def add_job_datetime(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Подработка добавлена!\n{position} | {section} | {dt}")
     await state.finish()
 
-# === ЗАПИСЬ НА ПОДРАБОТКУ ===
 @dp.callback_query_handler(lambda c: c.data.startswith('take_'))
 async def take_job(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
@@ -407,7 +391,6 @@ async def take_job(callback_query: types.CallbackQuery):
     )
     await callback_query.answer("Вы успешно записались!")
 
-# === ЗАПУСК ===
 if __name__ == '__main__':
     init_db()
     from aiogram import executor
